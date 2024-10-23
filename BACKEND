@@ -1,0 +1,156 @@
+
+const axios = require('axios');
+const querystring = require('querystring');
+const readline = require('readline');
+
+
+const client_id = '0133af9653b54fe697dd6f11c63bae06'; // Replace with your Spotify client ID
+const client_secret = '35b9d3b972414c029560ec9742673f90'; // Replace with your Spotify client secret
+const artistId = '4dpARuHxo51G3z768sgnrY'; // Replace with the actual artist ID
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+// Example express route for initiating login
+
+
+
+async function getAccessToken() {
+    const tokenUrl = 'https://accounts.spotify.com/api/token';
+    const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(`${client_id}:${client_secret}`).toString('base64')
+    };
+    const data = querystring.stringify({ grant_type: 'client_credentials' });
+
+    try {
+        const response = await axios.post(tokenUrl, data, { headers });
+        return response.data.access_token;
+    } catch (error) {
+        console.error('Error getting access token:', error.response.data);
+    }
+}
+async function fetchSongsByArtist(artistId, accessToken) {
+    try {
+        const albumsResponse = await axios.get(`https://api.spotify.com/v1/artists/${artistId}/albums`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        const albumsData = albumsResponse.data;
+
+        const allSongs = [];
+        for (const album of albumsData.items) {
+            const songsResponse = await axios.get(`https://api.spotify.com/v1/albums/${album.id}/tracks`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            const songsData = songsResponse.data;
+            allSongs.push(...songsData.items);
+        }
+
+        return allSongs;
+    } catch (error) {
+        console.error('Error fetching songs:', error.message);
+    }
+}
+
+function determineMood(valence, tempo) {
+    if (valence >= 0.6 && tempo >= 120) return 'Happy';
+    if (valence <= 0.4 && tempo <= 100) return 'Sad';
+    if (valence >= 0.5 && tempo >= 100) return 'Energetic';
+    if (valence >= 0.2 && valence <= 0.6 && tempo <= 100) return 'Relaxed';
+    return 'Unknown Mood';
+}
+
+async function fetchAudioFeatures(songIds, accessToken) {
+    const audioFeatures = [];
+    const chunkSize = 100; // Max IDs per request
+
+    for (let i = 0; i < songIds.length; i += chunkSize) {
+        const chunk = songIds.slice(i, i + chunkSize);
+        try {
+            const audioFeaturesResponse = await axios.get(`https://api.spotify.com/v1/audio-features?ids=${chunk.join(',')}`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            audioFeatures.push(...audioFeaturesResponse.data.audio_features);
+        } catch (error) {
+            console.error('Error fetching audio features:', error.message);
+        }
+    }
+
+    return audioFeatures;
+}
+
+// Function to get user input for mood preference
+function getUserMoodPreference() {
+    return new Promise((resolve) => {
+        const askForMood = () => {
+            rl.question('Enter your desired mood (Happy, Sad, Energetic, Relaxed) or type "exit" to quit: ', (mood) => {
+                const trimmedMood = mood.trim().toLowerCase();
+                if (trimmedMood === 'exit') {
+                    rl.close(); // Close the readline interface if user wants to exit
+                    console.log('Exiting the program.');
+                    return; // Stop the execution of the function
+                }
+                
+                const validMoods = ['happy', 'sad', 'energetic', 'relaxed'];
+                if (validMoods.includes(trimmedMood)) {
+                    resolve(trimmedMood); // Resolve with valid mood
+                } else {
+                    console.log('Invalid mood. Please try again.');
+                    askForMood(); // Repeat the question if mood is invalid
+                }
+            });
+        };
+
+        askForMood(); // Initial call to start the mood asking process
+    });
+}
+(async () => {
+    const accessToken = await getAccessToken();
+    if (accessToken) {
+        // const artistName = await askForArtistName(); // Get artist name from user
+        // const artistId = await getArtistIdByName(artistName, accessToken);
+        // if (artistId) {
+        //     console.log(`Artist ID for "${artistName}" is: ${artistId}`);
+        // }
+        const songs = await fetchSongsByArtist(artistId, accessToken);
+        console.log("Songs fetched");
+        if (songs) {
+            console.log('Songs by the artist:');
+            const songIds = songs.map(song => song.id);
+            const audioFeatures = await fetchAudioFeatures(songIds, accessToken);
+
+            const userMood = await getUserMoodPreference();
+            console.log("getusermood working")
+
+            if (userMood) {
+                songs.forEach((song, index) => {
+                    const albumName = song.album ? song.album.name : 'Unknown Album';
+                    const features = audioFeatures[index];
+
+                    if (features) {
+                        const mood = determineMood(features.valence, features.tempo);
+                        if (mood.toLowerCase() === userMood) {
+                            console.log(`${index + 1}: ${song.name} (Album: ${albumName}) - Mood: ${mood}`);
+                        }
+                    } else {
+                        console.log(`${index + 1}: ${song.name} (Album: ${albumName}) - Mood: Unknown (features not available)`);
+                    }
+                });
+            }
+        }
+    }
+    // Note: readline interface will close within getUserMoodPreference if "exit" is chosen
+})();
