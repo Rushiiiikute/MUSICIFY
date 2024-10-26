@@ -1,21 +1,27 @@
-
+const express = require('express');
+const cors = require('cors');
 const axios = require('axios');
 const querystring = require('querystring');
 const readline = require('readline');
+const app = express();
+
+//for css file
+app.use(express.static('public'));
 
 
-const client_id = '0133af9653b54fe697dd6f11c63bae06'; // Replace with your Spotify client ID
-const client_secret = '35b9d3b972414c029560ec9742673f90'; // Replace with your Spotify client secret
-const artistId = '4dpARuHxo51G3z768sgnrY'; // Replace with the actual artist ID
+//-----------------------
+ const client_id = '0133af9653b54fe697dd6f11c63bae06'; // Replace with your Spotify client ID
+ const client_secret = '35b9d3b972414c029560ec9742673f90'; // Replace with your Spotify client secret
 
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 });
 
-// Example express route for initiating login
 
-
+const PORT = process.env.PORT || 5000;
+app.use(cors());
+app.use(express.json());
 
 async function getAccessToken() {
     const tokenUrl = 'https://accounts.spotify.com/api/token';
@@ -29,9 +35,40 @@ async function getAccessToken() {
         const response = await axios.post(tokenUrl, data, { headers });
         return response.data.access_token;
     } catch (error) {
-        console.error('Error getting access token:', error.response.data);
+        if (error.response) {
+            console.error('Error getting access token:', error.response.data);
+        } else {
+            console.error('Error getting access token:', error.message);
+        }
     }
 }
+
+async function getArtistIdByName(artistName, accessToken) {
+    const searchUrl = 'https://api.spotify.com/v1/search';
+    try {
+        const response = await axios.get(searchUrl, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            params: {
+                q: artistName,
+                type: 'artist',
+                limit: 1
+            }
+        });
+
+        const artist = response.data.artists.items[0];
+        if (artist) {
+            return artist.id;
+        } else {
+            console.log('Artist not found.');
+        }
+    } catch (error) {
+        console.error('Error fetching artist ID:', error.message);
+    }
+}
+
 async function fetchSongsByArtist(artistId, accessToken) {
     try {
         const albumsResponse = await axios.get(`https://api.spotify.com/v1/artists/${artistId}/albums`, {
@@ -42,8 +79,8 @@ async function fetchSongsByArtist(artistId, accessToken) {
         });
 
         const albumsData = albumsResponse.data;
-
         const allSongs = [];
+
         for (const album of albumsData.items) {
             const songsResponse = await axios.get(`https://api.spotify.com/v1/albums/${album.id}/tracks`, {
                 headers: {
@@ -72,7 +109,7 @@ function determineMood(valence, tempo) {
 
 async function fetchAudioFeatures(songIds, accessToken) {
     const audioFeatures = [];
-    const chunkSize = 100; // Max IDs per request
+    const chunkSize = 100;
 
     for (let i = 0; i < songIds.length; i += chunkSize) {
         const chunk = songIds.slice(i, i + chunkSize);
@@ -92,65 +129,120 @@ async function fetchAudioFeatures(songIds, accessToken) {
     return audioFeatures;
 }
 
-// Function to get user input for mood preference
-function getUserMoodPreference() {
+function askQuestion(query) {
     return new Promise((resolve) => {
-        const askForMood = () => {
-            rl.question('Enter your desired mood (Happy, Sad, Energetic, Relaxed) or type "exit" to quit: ', (mood) => {
-                const trimmedMood = mood.trim().toLowerCase();
-                if (trimmedMood === 'exit') {
-                    rl.close(); // Close the readline interface if user wants to exit
-                    console.log('Exiting the program.');
-                    return; // Stop the execution of the function
-                }
-                
-                const validMoods = ['happy', 'sad', 'energetic', 'relaxed'];
-                if (validMoods.includes(trimmedMood)) {
-                    resolve(trimmedMood); // Resolve with valid mood
-                } else {
-                    console.log('Invalid mood. Please try again.');
-                    askForMood(); // Repeat the question if mood is invalid
-                }
-            });
-        };
-
-        askForMood(); // Initial call to start the mood asking process
+        rl.question(query, (answer) => {
+            resolve(answer.trim());
+        });
     });
 }
-(async () => {
-    const accessToken = await getAccessToken();
-    if (accessToken) {
-        // const artistName = await askForArtistName(); // Get artist name from user
-        // const artistId = await getArtistIdByName(artistName, accessToken);
-        // if (artistId) {
-        //     console.log(`Artist ID for "${artistName}" is: ${artistId}`);
-        // }
-        const songs = await fetchSongsByArtist(artistId, accessToken);
-        console.log("Songs fetched");
-        if (songs) {
-            console.log('Songs by the artist:');
-            const songIds = songs.map(song => song.id);
-            const audioFeatures = await fetchAudioFeatures(songIds, accessToken);
 
-            const userMood = await getUserMoodPreference();
-            console.log("getusermood working")
-
-            if (userMood) {
-                songs.forEach((song, index) => {
-                    const albumName = song.album ? song.album.name : 'Unknown Album';
-                    const features = audioFeatures[index];
-
-                    if (features) {
-                        const mood = determineMood(features.valence, features.tempo);
-                        if (mood.toLowerCase() === userMood) {
-                            console.log(`${index + 1}: ${song.name} (Album: ${albumName}) - Mood: ${mood}`);
-                        }
-                    } else {
-                        console.log(`${index + 1}: ${song.name} (Album: ${albumName}) - Mood: Unknown (features not available)`);
-                    }
-                });
-            }
+async function getUserMoodPreference() {
+    while (true) {
+        const mood = await askQuestion('Enter your desired mood (Happy, Sad, Energetic, Relaxed) or type "exit" to quit: ');
+        const trimmedMood = mood.toLowerCase();
+        if (trimmedMood === 'exit') {
+            rl.close();
+            console.log('Exiting the program.');
+            process.exit(0);
+        }
+        
+        const validMoods = ['happy', 'sad', 'energetic', 'relaxed'];
+        if (validMoods.includes(trimmedMood)) {
+            return trimmedMood; // Return the valid mood
+        } else {
+            console.log('Invalid mood. Please try again.');
         }
     }
-    // Note: readline interface will close within getUserMoodPreference if "exit" is chosen
-})();
+}
+app.get('/api/input',async (req,res)=>{
+    
+})
+
+
+// GIVING OUTPUT OF SONGS IN HTML 
+
+app.get('/api/songs', async (req, res) => {
+    const { artistName, userMood } = req.query;
+
+    try {
+        const accessToken = await getAccessToken();
+        if (accessToken) {
+            const artistId = await getArtistIdByName(artistName,accessToken);
+            if (artistId) {
+                const songs = await fetchSongsByArtist(artistId, accessToken);
+                if (songs && songs.length > 0) {
+                    const songIds = songs.map(song => song.id);
+                    const audioFeatures = await fetchAudioFeatures(songIds, accessToken);
+
+                    const results = songs
+                        .map((song, index) => {
+                            const albumName = song.album ? song.album.name : 'Unknown Album';
+                            const features = audioFeatures[index];
+                            if (features) {
+                                const mood = determineMood(features.valence, features.tempo);
+                                return { name: song.name, album: albumName, mood: mood, id: song.id };
+                            }
+                            return null;
+                        })
+                        .filter(song => song && song.mood.toLowerCase() === userMood.toLowerCase());
+
+                    res.status(200).send(generateHTML(results));
+                } else {
+                    res.status(404).send('<h1>No songs found for the selected artist.</h1>');
+                }
+            } else {
+                res.status(404).send('<h1>Artist not found.</h1>');
+            }
+        } else {
+            res.status(500).send('<h1>Failed to get access token.</h1>');
+        }
+    } catch (error) {
+        console.error('Error in API:', error);
+        res.status(500).send('<h1>An error occurred.</h1>');
+    }
+});
+function generateHTML(songs) {
+    const songElements = songs
+        .map((song, index) => {
+            return `
+                <div class="song">
+                    <h2>${index + 1}. ${song.name}</h2>
+                    <p>Album: ${song.album}</p>
+                    <p>Mood: ${song.mood}</p>
+                    // <button class="play-button" onclick="playSong('${song.id}')">Play</button>
+                  
+                </div>
+            `;
+        })
+        .join('');
+
+    return `
+        <html>
+            <head>
+                <title>Songs by Artist</title>
+                <link rel="stylesheet" href="/style.css" />
+            </head>
+            <body>
+                <div class="container">
+                    ${songElements}
+                </div>
+                <script>
+                    function playSong(id) {
+                        const url = 'https://open.spotify.com/track/' + id;
+                        window.open(url, '_blank');
+                    }
+                </script>
+            </body>
+        </html>
+    `;
+}
+
+
+
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
+
+
